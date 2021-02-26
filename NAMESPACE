@@ -1,0 +1,10 @@
+import(gbm, survey, xtable, lattice)
+importFrom("graphics", "plot", "par")
+importFrom("stats", "dnorm", "lm", "model.frame", "model.matrix",
+               "model.response", "optimize", "predict", "sd", "setNames",
+               "update")
+
+export(ps.cont, get.weights, bal.table, plot.ps.cont, summary.ps.cont)
+
+S3method(plot, ps.cont)
+S3method(summary, ps.cont)

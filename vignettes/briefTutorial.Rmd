@@ -1,0 +1,202 @@
+---
+title: "Brief Tutorial for twangContinuous"
+author: "Donna L. Coffman and Beth Ann Griffin"
+date: "`r Sys.Date()`"
+output:
+  knitr:::html_vignette:
+    toc: true
+    fig_caption: yes
+vignette: >
+  %\VignetteIndexEntry{Brief Tutorial for twangContinuous}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This document provides a brief tutorial on using the `twangContinous` package to estimate causal effects for continuous exposure variables using generalized propensity scores (GPSs) estimated via generalized boosted models (GBMs).
+
+Investigators often find themselves interested in examining the causal effect of a continuous exposure on an outcome. For example, it may be of interest to estimate the causal effect of trauma symptoms on substance use frequency among individuals with substance use disorder (SUD) or it might be of interest to understand the impact of income on measures of well-being. This package was designed to help investigators address such questions using state-of-the-art causal inference methods.
+
+To do so, we first introduce some notation. Let $A$ represent the continuous exposure or treatment variable, $Y$ the outcome, and $X$ the pretreatment covariates. Define $Y_i(a)$ as the potential outcome for individual $i$ if they receive treatment level $A=a$. Further assume that $Y_i(a)$ is well-defined for $a \in \mathcal{A}$ where $\mathcal{A}$ is a continuous domain. Our goal is to estimate $E[Y(a)]$, the mean effect of exposure $A=a$ on the outcome. 
+
+In this setting, we define the generalized propensity score (GPS) as the conditional density function for $A$ given $X$ (i.e., $f_{A|X}(a|x)$). As with all propensity score analyses, several assumptions are needed before proceeding. First, the ignorability assumption requires that 
+\[
+ f(a|Y(a), x) = f(a|x)
+\]
+where $f(a|\cdot)$ is the conditional probability density of $A$. Thus, instead of conditioning on a potentially high-dimensional $X$, it is sufficient to condition on the GPS (Imai & van Dyk, 2004). There is also a positivity assumption, such that all individuals have a non-zero probability of having received all possible values of the continuous exposure. Finally, the stable unit treatment value assumption (SUTVA) for continuous exposure settings (Hirano & Imbens, 2004; Imai & van Dyk, 2004) implies that there is no interference between units. Notably, propensity scores for continuous exposures are a fairly straightforward extension of binary exposures although they have not been nearly as popular in applications.
+
+Once estimated, the stabilized inverse of the GPS may be used to weight the outcome model where for the $i^{th}$ subject, the weight is given as
+\[
+ w_i = \frac{f_A(A_i) }{f_{A|X}(A_i|X_i)}
+\]
+for $i=1,\ldots,N$ individuals (Robins & Hernan, 2000). As in the case for binary exposures, the GPS can be estimated with a parametric model. For example, Robins & Hernan (2000) used a linear regression model to estimate GPSs. In this case, with a sample of $N$ observations, one regresses $A$ on $X$ using normal linear regression and then obtains predicted values for $A$, namely $\widehat{A_i}$ (representing the mean relationship between $A$ and the given pretreatment covariates included in $X$), and $\widehat{\sigma}$ (the residual variance from the regression model). Then, one would plug these estimates into the normal density to obtain the needed GPS weights,
+\[
+  \frac{1}{\sqrt{2 \pi} \widehat{\sigma}} exp \left\{\frac{(A_i -
+  \widehat{A_i})^2}{2\widehat{\sigma}^2} \right\}.
+\]
+
+However, as with binary exposures, a non-parametric model, such as GBM, is more flexible and potentially advantageous in that non-linearities and interactions among potential confounders up to a level prespecified by the user (e.g., all 3-way interactions) may be automatically included (McCaffrey, Ridgeway, & Morral, 2004). Additionally, GBM allows highly correlated confounders (i.e., predictors) and reduces bias and variance of causal effect estimates in comparison to parametric models (Lee, Lessler, & Stuart, 2010). Zhu, Coffman, & Ghosh (2015) showed that GBMs perform well for estimating the GPS for a continuous exposure just as they do for binary exposures. Their work directly used the `gbm` R package but, with this package, we have now integrated the function within the `twang` R package to take advantage of the useful diagnostic features of the original `twang` package (e.g., balance assessment plots and tables). 
+
+Prior to use, GBM requires specification of a stopping criterion. For continuous exposures, we use the average or maximum absolute Pearson correlation between the exposure and each confounder to summarize balance performance at each iteration of the GBM fit, with the optimal iteration chosen as the one that minimizes the average or maximum absolute Pearson correlation. Ideally, we hope the optimal iteration is such that the Pearson correlations are all 0 given that the goal when using GPS weights is that the exposure should be unrelated to the covariates in the weighted sample. Thus, balance can be assessed by computing Pearson correlations between each of the potential confounders and the exposure. Zhu et al. (2015) showed that 0.1 is a reasonable cutoff for this metric.
+
+## Using the package
+
+If you have not already done so, install \texttt{twangContinuous} from CRAN by typing \texttt{install.packages("twangContinuous")}. Alternatively, you can install development versions directly from GitHub by first installing and loading the `devtools` package and using the following code.
+
+```{r, results='show', purl=FALSE, eval=FALSE}
+library(devtools) 
+devtools::install_github("dcoffman/twangContinuous")
+```
+
+`twangContinuous` relies on other R packages, especially `gbm`. You may have to run `install.packages()` for these as well if they are not already installed. You will only need to do this step once. In the future running `update.packages()` regularly will ensure that you have the latest versions of the packages, including bug fixes and new features.
+
+To start using `twangContinuous`, first load the package. You will have to do this step once for each R session that you run. We also set the seed of R's pseudo random number generator so that the results are exactly replicable.
+
+```{r}
+library(twangContinuous)
+set.seed(1234)
+```
+
+We will use the synthetic data set included with the package and call it `dat` to illustrate the use of the package. In this data set, `tss_0` is the continuous exposure and represents a count of trauma symptoms and `sfs8p_3` is the outcome variable and measures substance use frequency at 3-month follow-up. The following baseline covariates are included in the propensity score model: substance use frequency scale, `sfs8p_0`, treatment group, `treat`, whether they are in recovery, `recov_0`, whether they primarily use opioids vs. alcohol/marijuana vs. other drugs, `subsgrps_n`, the substance problem scale (past month), `sp_sm_0`, and substance abuse treatment index, `sati_0`. These covariates are potential confounders of `tss_0` and `sfs8p_3` and were generated to mimic the confounders in the real dataset. Load the data using the following code:
+
+```{r, message=FALSE}
+data(dat)
+```
+
+R can read data from many other sources. The manual [R Data Import/Export](https://cran.r-project.org/doc/manuals/R-data.pdf) describes those options in detail.
+
+The function `ps.cont()` is the main function in `twangContinuous`. Enter the formula using the standard R formula notation (e.g., `tss_0 ~ sfs8p_0 + sati_0 + treat`) where the continuous exposure variable is on the left hand side of `'~'` and the confounders are on the right hand side. Next, use the `data` argument to specify the name of the data set.
+
+The function includes several optional arguments: `n.trees`, `interaction.depth`, and `shrinkage` are parameters for the `gbm` model.
+
+`n.trees` - the maximum number of iterations that `gbm` will run. `ps.cont()` will issue a warning if the estimated optimal number of iterations is too close to the bound selected in this argument because it indicates that balance may improve if more complex models (i.e., those with more trees) are considered. The user should increase `n.trees` or decrease `shrinkage` (see below) if this warning appears. The default number of trees is set to 10000.
+
+`interaction.depth` - controls the level of interactions allowed in the GBM. The default is 3 (i.e., up to three-way interactions among the covariates are allowed) and we typically use the default in our analyses.
+
+`shrinkage` - controls the amount of shrinkage. Small values such as 0.005 or 0.001 yield smooth fits but require greater values of `n.trees` to achieve adequate fits. Computational time increases inversely with `shrinkage` argument. The default value is set to 0.01.
+
+Two other optional arguments to `ps.cont()` are `verbose` and `sampw`.
+
+`sampw` - optional argument and by default is set to NULL. If there are survey weights, they can be included using the `sampw` argument.
+
+`verbose` - controls the amount of information printed to the console. By default it is set to FALSE.
+
+In the example below, because the values of `verbose`, `shrinkage`, and `interaction.depth` are set at the default values, it would not be necessary to include these arguments but for the sake of illustration, they are included. We set `n.trees` to 500 for the purposes of reducing computational time in compiling this tutorial. (We previously ran the model and know that 500 trees are enough.)
+
+```{r}
+test.mod <- ps.cont(tss_0 ~ sfs8p_0 + sati_0 + sp_sm_0 
+                            + recov_0 + subsgrps_n + treat,
+                    data=dat,
+                    n.trees = 500,
+                    shrinkage = 0.01,
+                    interaction.depth = 3,
+                    verbose = FALSE)
+```
+
+For those familiar with the `ps()` function in `twang`, unlike the `ps()` function, `ps.cont()` does not have arguments for `estimand` or `perm.test.iters`.
+
+The only stop method currently available is the average absolute weighted correlation, and thus, it is set as the default. At this point in development, only the average absolute weighted correlation has been thoroughly tested as a stopping criteria (see Zhu et al., 2015). The stop method specifies a set (or sets) of rules and measures for assessing the balance on the pretreatment covariates. The `ps.cont()` function selects the optimal number of GBM iterations to minimize the correlation between the continuous exposure variable and the pretreatment covariates. To summarize the correlations across all of the covariates, we first take the absolute value of the correlations and then take the average across all of the covariates. Future developments will allow the user to specify the maximum absolute weighted correlation or the root mean squared weighted correlation using the argument `stop.method` (but at present this cannot be changed). 
+
+## Assessing Diagnostics
+
+Having fit the propensity score model, the analyst should perform various diagnostic checks prior to estimating the causal effect. The first of these diagnostic checks makes sure that the specified value of `n.trees` allowed GBM to explore sufficiently complicated models. We can do this using the `plot()` function with the argument `plots="optimize"`.
+
+```{r}
+plot(test.mod, plots="optimize")
+```
+
+The plot gives the balance measures as a function of the number of iterations in the GBM algorithm, with higher iterations corresponding to more complicated fitted models. If it appears that additional iterations would be likely to result in lower values of the balance statistic, `n.trees` should be increased. However, after a point, additional complexity typically makes the balance worse. The average absolute correlation was minimized at iteration 347 (the exact iteration is known from using the `summary()` function that will be discussed shortly).
+
+Once the GPSs are estimated, the `twangContinuous` package automatically generates the inverse probability (or propensity) weights. In the original unweighted data, the continuous exposure is correlated to some degree with each of the confounders but in the weighted data, these correlations should be close to zero, indicating that the continuous exposure and the confounders are unrelated and therefore the relationships between the continuous exposure and the confounders have been broken. If this relationship is broken, then the confounders are no longer confounders (recall the definition of a confounder is a variable that affects, or is related to, both the exposure and the outcome).
+
+Having saved the `ps.cont` object, the analyst can use the `summary()` function to obtain information about the effective sample size (ESS) of the weighted data (the `ess` column, see details below) and the maximum absolute correlation (`max.wcor` column), mean or average absolute correlation (`mean.wcor` column), and the root mean square of the absolute correlations (`rms.wcor` column) in the unweighted and weighted data (`unw` and `AAC` rows, respectively). Finally, the `iter` column specifies the iteration at which the average absolute correlation (`mean.wcor`) was minimized as described above in the discussion of stop methods.
+
+```{r}
+summary(test.mod)
+```
+
+In general, weighted means can have greater sampling variance than unweighted means from a sample of equal size. The ESS of the weighted data captures this increase in variance as
+
+\begin{equation}
+\mathrm{ESS} = \frac{\left(\sum_{i\in C} w_i\right)^2}{\sum_{i\in C}
+w_i^2}.
+\label{eq:ESS}
+\end{equation}
+
+The ESS is approximately the number of observations from a simple random sample that yields an estimate with sampling variation equal to the sampling variation obtained with the weighted observations. The ESS is an accurate measure of the relative size of the variance of means when the weights are fixed or they are uncorrelated with outcomes. Otherwise the ESS underestimates the effective sample size (Little & Vartivarian, 2004). With propensity score weights, it is rare that weights are uncorrelated with outcomes. Hence the ESS typically gives a lower bound, but it still serves as a useful measure for choosing among alternative models and assessing the overall quality of a model, even if it provides a possibly conservative picture of the loss in precision due to weighting.
+
+The `ess` column in the summary table shows that although the original (i.e., unweighted) data had 4000 cases, the propensity score weighting effectively uses only 3560 cases. While this may seem like a large loss of sample size, this is a byproduct of the degree of confounding in the original data.
+
+### Balance Assessment
+
+The function `bal.table` produces a table that shows how well the weights reduced the correlations between the exposure and each covariate.
+
+```{r}
+bal.table(test.mod, digits = 3)
+```
+
+The `unw` column gives the unweighted correlation and the `wcor` column gives the weighted correlation between the exposure and each covariate. Thus, the table shows that the correlation between `sati_0` and `tss_0` in the unweighted data was 0.139. After applying the propensity score weights, this correlation has been reduced to -0.011. Ideally, all of the correlations in the weighted data should be below 0.1 (i.e., a small correlation according to Cohen's (1988) convention [see also Zhu et al., 2015]) in absolute value and the closer to zero, the better. Thus, the above table indicates that we have achieved good balance on the covariates.
+
+To visualize how the correlations have decreased (in absolute value) in the weighted sample, use the `plot()` function with the argument `plots="es"`. Each line represents a covariate. A horizontal line 0.1 has been included for reference as we would like to see all the weighted correlations below this line.
+
+```{r}
+plot(test.mod, plots="es")
+```
+
+## Estimating the Causal Effect
+
+A separate R package, the `survey` package, is useful for performing the outcome analysis using weights and properly accounting for the weights when computing standard error estimates. It is not a part of the standard R installation so you may need to install it from CRAN. Once installed, it can be loaded using:
+
+```{r, message=FALSE}
+library(survey)
+```
+
+The `get.weights()` function from the `twangContinuous` package extracts the propensity score weights from a `ps.cont` object. Those weights may then be saved into the dataset and used as case weights in a `svydesign` object.
+
+```{r}
+dat$wts <- get.weights(test.mod) 
+design.ps <- svydesign(ids=~1, weights=~wts, data=dat) 
+```
+
+The `svydesign` function from the `survey` package creates an object that stores the dataset along with design information needed for analyses. See `help(svydesign)` for more details on setting up `svydesign` objects.
+
+We are finally ready to estimate the causal effect of `tss_0` on `sfs8p_3`.
+
+```{r}
+outcome.model <- svyglm(sfs8p_3 ~ tss_0, design = design.ps, 
+                        family = gaussian())
+summary(outcome.model)
+```
+
+The results indicate that for each additional trauma symptom, substance use frequency increases by 0.003, which is not statistically significant, $t=0.042, p = .967$.
+
+## About This Tutorial
+This tutorial and the `twangContinuous` package were supported by funding from grant 1R01DA034065 from the National Institute on Drug Abuse. The overarching goal of the grant is to develop statistical methods and tools that will provide addiction health services researchers and others with the tools and training they need to study the effectiveness of treatments using observational data. The work is an extension of the Toolkit for Weighting and Analysis of Nonequivalent Groups, or TWANG, which contains a set of functions to support causal modeling of observational data through the estimation and evaluation of propensity score weights. The TWANG package was first developed in 2004 by RAND researchers for the R statistical computing language and environment and has since been expanded to include tools for SAS, Stata, and Shiny. For more information about TWANG and other causal tools being developed, see <https://www.rand.org/statistics/twang>.
+
+RAND Social and Economic Well-Being is a division of the RAND Corporation that seeks to actively improve the health and social and economic well-being of populations and communities throughout the world. This research was conducted in the Social and Behavioral Policy Program within RAND Social and Economic Well-Being. The program focuses on such topics as risk factors and prevention programs, social safety net programs and other social supports, poverty, aging, disability, child and youth health and well-being, and quality of life, as well as other policy concerns that are influenced by social and behavioral actions and systems that affect well-being. For more information, email <sbp@rand.org>.
+
+### Acknowledgments
+
+We would like to thank Noah Greifer for code QA and Yajnaseni Chakraborti, Megan Schuler, Mary Ellen Slaughter, and Maria DeYoreo for feedback on this tutorial and beta testing the package.
+
+
+## References
+
+Hirano, K., & Imbens, G. W. (2004). The propensity score with continuous treatments. *Applied Bayesian Modeling and Causal Inference from Incomplete-Data Perspectives*. Hoboken, NJ: John Wiley & Sons.
+
+Imai, K., & van Dyk, D. A. (2004). Causal inference with general treatment regimes: Generalizing the propensity score. *Journal of the American Statistical Association, 99*, 854-866. 
+
+Lee, B. K., Lessler, J., & Stuart, E. A. (2010). Improving propensity score weighting using machine learning. *Statistics in Medicine, 29*(3), 337-346. \doi{doi:10.1002/Sim.3782}
+
+Little, R. J., & Vartivarian, S. (2004). Does weighting for nonresponse increase the variance of survey means? *ASA Proceedings of the Joint Statistical Meetings*, 3897-3904 American Statistical Association (Alexandria, VA)
+
+McCaffrey, D. F., Ridgeway, G., & Morral, A. R. (2004). Propensity score estimation with boosted regression for evaluating causal effects in observational studies. *Psychological Methods, 9*(4), 403-425. \doi{doi:10.1037/1082-989x.9.4.403}
+
+Robins, J. M., Hernan, M. A., & Brumback, B. (2000). Marginal structural models and causal inference in epidemiology. *Epidemiology, 11*(5), 550-560.
+
+Zhu, Y., Coffman, D. L., & Ghosh, D. (2015). A boosting algorithm for estimating generalized propensity scores with continuous treatments. *Journal of Causal Inference, 3*(1), 25-40. \doi{doi:10.1515/jci-2014-0022}
